@@ -1,0 +1,19 @@
+#!/bin/sh
+
+printf "Upping maximum GPU memory (once per reboot)..."
+sudo sysctl iogpu.wired_limit_mb=120000
+printf "done\n"
+
+printf "Starting Sushi v1.2.4...\n\n"
+
+sushi serve \
+  --model ~/.sushi/models/Qwen3.8-Flash-Next-Sushi-4bpw \
+  --mtp \
+  --kv-quant 8 \
+  --mtp-head-kv-quant \
+  --ctx-size 1048576 \
+  --prefill-chunk 2048 \
+  --max-tokens 64000 \
+  --prefix-cache-disk 20GB \
+  --prefix-cache-entries 1 \
+  --temp 1

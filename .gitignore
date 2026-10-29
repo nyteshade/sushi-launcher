@@ -1,0 +1,32 @@
+# ── Build outputs ────────────────────────────────────────────
+# SwiftPM scratch (local config writes intermediates under .build/out/)
+.build/
+# Assembled "Sushi Launcher.app" from build-app.sh
+build/
+
+# ── Xcode, if Package.swift is ever opened in it ─────────────
+# (github/gitignore Swift.gitignore + Global/Xcode.gitignore)
+xcuserdata/
+*.xcuserstate
+*.hmap
+*.dSYM
+*.dSYM.zip
+*.ipa
+.swiftpm/
+
+# ── macOS metadata ───────────────────────────────────────────
+# (github/gitignore Global/macOS.gitignore, repo-relevant subset)
+.DS_Store
+.AppleDouble
+.LSOverride
+.localized
+._*                       # resource forks — poison for codesign
+.Spotlight-V100
+.Trashes
+.fseventsd
+.DocumentRevisions-V100
+.VolumeIcon.icns
+.com.apple.timemachine.donotpresent
+
+# ── Session scratch (staged commit-message files) ────────────
+COMMIT-MSG-*.txt

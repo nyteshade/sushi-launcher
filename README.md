@@ -92,7 +92,7 @@ Perfect Dark sushi cannon.
 
 ```
 Package.swift                    SwiftPM executable target
-build-app.sh                     build → assemble .app → strip xattrs → ad-hoc sign
+build-app.sh                     build → assemble → strip xattrs → sign (ad-hoc, or NOTARIZE=1)
 Resources/Info.plist             bundle metadata
 Sources/SushiLauncher/
   App/       entry point, scenes, menu commands, AppModel, NSStatusItem controller
@@ -194,9 +194,15 @@ cp -R 'build/Sushi Launcher.app' /Applications/
 The script compiles release, assembles the bundle, copies the icons (menu
 glyph: `icons/sushi-menuTemplate.png` ▸ `~/Desktop/sushi-launcher.png` ▸
 `icons/sushi-launcher-plain.png`), strips Finder xattrs (`xattr -cr` —
-detritus makes codesign fail), and ad-hoc signs. The app is **unsandboxed
-by design**: it must exec sushi, bind a port, and read `~/.sushi`. For
-distribution beyond your machines, sign with a Developer ID and notarize.
+detritus makes codesign fail), and signs. The app is **unsandboxed
+by design**: it must exec sushi, bind a port, and read `~/.sushi`. Ad-hoc
+signing (the default) is everything your own machine needs — locally built
+files never get quarantined. To hand the app to *other* Macs, build with
+`NOTARIZE=1`: it switches to a Developer ID certificate + hardened runtime,
+submits to Apple's notary service, and staples the ticket so Gatekeeper
+opens it happily. One-time setup (identity in Keychain + `xcrun
+notarytool store-credentials`) is documented in the step-4 comment of
+`build-app.sh`.
 
 ## Keyboard shortcuts
 
@@ -228,7 +234,7 @@ distribution beyond your machines, sign with a Developer ID and notarize.
 
 The app itself talks to the network in exactly two places: the Hugging Face
 model API to enrich the picker (parameter counts, download stats), and sushi
-itsself when pulling packs / checking releases (suppress the latter with
+itself when pulling packs / checking releases (suppress the latter with
 `--no-update-check`). Launch flags you enter — including `--api-key` — are
 passed to the child process as argv, visible in the process table and in
 `ps` output; sushi's `--api-key-env` exists for keeping them out.

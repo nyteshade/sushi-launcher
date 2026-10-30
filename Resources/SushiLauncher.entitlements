@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Hardened-runtime companion file. The app is deliberately NOT
+	     sandboxed: it execs sushi, binds a listening port, and reads
+	     ~/.sushi. Launching child processes needs no special entitlement
+	     under the hardened runtime (only in-process loading of unsigned
+	     code does), so this stays nearly empty. Enable what you need: -->
+
+	<!-- Only if we ever dlopen/bridge-load unsigned helper code:
+	<key>com.apple.security.cs.disable-library-validation</key>
+	<true/>
+	-->
+</dict>
+</plist>

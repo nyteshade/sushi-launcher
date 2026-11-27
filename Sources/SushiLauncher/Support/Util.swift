@@ -67,21 +67,106 @@ enum Shell {
     }
 }
 
-// MARK: - GPU wired limit (iogpu.wired_limit_mb)
+// MARK: - GPU wired limit
+//
+// sushi's docs are explicit that the GPU limit is only half the setting:
+//
+//   "Every GPU limit below is set together with the two user-wire limits,
+//    always, at the same value in bytes (N MB becomes N × 1,048,576 bytes);
+//    otherwise macOS keeps capping what sushi may wire at its lower default
+//    and prefill slows with no error."
+//
+// So the unit of work is the TRIPLE, not the GPU key. Setting only
+// iogpu.wired_limit_mb — which is what this app used to do — leaves the two
+// user-wire limits at whatever they were, and the cap silently wins.
 
 enum GPULimit {
     static let sysctlKey = "iogpu.wired_limit_mb"
+    static let userWireKeys = ["vm.global_user_wire_limit", "vm.user_wire_limit"]
 
-    /// Current limit in MB, or nil when unreadable. BLOCKS.
+    /// Bytes per MB, as the docs define the conversion.
+    static let bytesPerMB = 1_048_576
+
+    /// The three keys, in the order the docs' command sets them.
+    static var allKeys: [String] { [sysctlKey] + userWireKeys }
+
+    /// The byte value the two user-wire limits must carry for a given MB.
+    static func wireBytes(forMB mb: Int) -> Int { mb * bytesPerMB }
+
+    // MARK: Reading
+
+    /// Current GPU limit in MB, or nil when unreadable. BLOCKS.
     static func currentMB() -> Int? {
-        guard let r = Shell.runCapture("/usr/sbin/sysctl", ["-n", sysctlKey], timeout: 10) else { return nil }
-        guard r.status == 0 else { return nil }
+        guard let r = Shell.runCapture("/usr/sbin/sysctl", ["-n", sysctlKey], timeout: 10),
+              r.status == 0 else { return nil }
         return Int(r.stdout.trimmed)
     }
 
-    /// Set the limit, prompting for authorization. BLOCKS.
+    /// All three limits as they are now. BLOCKS.
+    struct State {
+        var gpuMB: Int?
+        var globalWireBytes: Int?
+        var userWireBytes: Int?
+
+        /// True when both user-wire limits carry the GPU limit's byte value.
+        /// A false here is the silent-prefill-slowdown condition.
+        var isConsistent: Bool {
+            guard let gpuMB else { return false }
+            let want = GPULimit.wireBytes(forMB: gpuMB)
+            return globalWireBytes == want && userWireBytes == want
+        }
+
+        /// The user-wire limits expressed in MB, for a readable message.
+        var globalWireMB: Int? { globalWireBytes.map { $0 / GPULimit.bytesPerMB } }
+        var userWireMB: Int? { userWireBytes.map { $0 / GPULimit.bytesPerMB } }
+    }
+
+    static func readState() -> State {
+        var state = State()
+        state.gpuMB = currentMB()
+        if let r = Shell.runCapture("/usr/sbin/sysctl", ["-n"] + userWireKeys, timeout: 10),
+           r.status == 0 {
+            // `sysctl -n a b` prints one value per line, in argument order.
+            let values = r.stdout
+                .components(separatedBy: "\n")
+                .map { $0.trimmed }
+                .filter { !$0.isEmpty }
+            if values.count >= 2 {
+                state.globalWireBytes = Int(values[0])
+                state.userWireBytes = Int(values[1])
+            }
+        }
+        return state
+    }
+
+    // MARK: Writing
+
+    /// The command the docs prescribe, as one string.
+    static func command(mb: Int) -> String {
+        let bytes = wireBytes(forMB: mb)
+        return "/usr/sbin/sysctl \(sysctlKey)=\(mb) "
+            + userWireKeys.map { "\($0)=\(bytes)" }.joined(separator: " ")
+    }
+
+    /// Set all three limits, prompting for authorization once. BLOCKS.
     static func raise(mb: Int) -> Bool {
-        Shell.runPrivileged("/usr/sbin/sysctl \(sysctlKey)=\(mb)")
+        Shell.runPrivileged(command(mb: mb))
+    }
+
+    /// A one-line description of what is wrong, or nil when consistent.
+    static func inconsistencyNote(_ state: State) -> String? {
+        guard let gpuMB = state.gpuMB else { return "Could not read \(sysctlKey)." }
+        if state.isConsistent { return nil }
+        let want = wireBytes(forMB: gpuMB)
+        var parts: [String] = []
+        if let g = state.globalWireBytes, g != want {
+            parts.append("vm.global_user_wire_limit is \(g) bytes (\(g / bytesPerMB) MB)")
+        }
+        if let u = state.userWireBytes, u != want {
+            parts.append("vm.user_wire_limit is \(u) bytes (\(u / bytesPerMB) MB)")
+        }
+        if parts.isEmpty { return nil }
+        return "\(sysctlKey) is \(gpuMB) MB but \(parts.joined(separator: " and ")) — both must be \(want) bytes (\(gpuMB) MB). macOS caps what sushi may wire at the lower value and prefill slows with no error."
     }
 }
 

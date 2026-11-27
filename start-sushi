@@ -1,19 +1,37 @@
 #!/bin/sh
+#
+# Raise the GPU wired limit, then serve the pack installed on this Mac.
+#
+# The limit is a TRIPLE, not one key. sushi's docs are explicit: set the GPU
+# limit together with the two user-wire limits, always, at the same value in
+# bytes (N MB becomes N × 1,048,576 bytes). Setting only iogpu.wired_limit_mb
+# leaves macOS capping what sushi may wire at the lower default, and prefill
+# slows with no error. All three reset at every reboot.
+#
+# N = 120000 MB on a 128 GB Mac (the docs' standard is RAM in MB less 4096).
+
+LIMIT_MB=120000
+LIMIT_BYTES=$((LIMIT_MB * 1048576))
 
 printf "Upping maximum GPU memory (once per reboot)..."
-sudo sysctl iogpu.wired_limit_mb=120000
+sudo sysctl iogpu.wired_limit_mb=$LIMIT_MB \
+            vm.global_user_wire_limit=$LIMIT_BYTES \
+            vm.user_wire_limit=$LIMIT_BYTES
 printf "done\n"
 
-printf "Starting Sushi v1.2.4...\n\n"
+printf "Starting sushi...\n\n"
 
+# Flags follow docs/usage.md's Qwen recipe. --prefill-chunk and
+# --prefix-cache-entries were REMOVED in sushi 1.8: the replacements are
+# --prefill-chunk-max and --max-concurrent (which now sizes the RAM prefix
+# cache). Passing the old names exits 1.
 sushi serve \
-  --model ~/.sushi/models/Qwen3.8-Flash-Next-Sushi-4bpw \
+  --model ~/.sushi/models/Qwen3.8-Flash-Next-Sushi-STQ-2.75bpw \
   --mtp \
   --kv-quant 8 \
   --mtp-head-kv-quant \
   --ctx-size 1048576 \
-  --prefill-chunk 2048 \
   --max-tokens 64000 \
   --prefix-cache-disk 20GB \
-  --prefix-cache-entries 1 \
+  --max-concurrent 1 \
   --temp 1

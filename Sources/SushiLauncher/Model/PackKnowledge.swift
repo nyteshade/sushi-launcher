@@ -61,6 +61,14 @@ enum PackKnowledge {
             ctx1M: [],
             minMac: [(1.75, 128)]
         ),
+        .hy4: PackInfo(
+            summary: "Hy4 Flash — 512 routed experts per layer. On a 64 GB Mac with no budget flag it holds them all when 46.2 GB is free; otherwise it streams at the largest budget that fits. --expert-cache-bias 0.2 favours the experts already in memory, which is lossy.",
+            modalities: "text + images",
+            license: "see pack page",
+            weights: [(2.25, 46.2), (4, 92)],
+            ctx1M: [],
+            minMac: [(2.25, 48), (4, 96)]
+        ),
     ]
 
     /// Parse "…:2.75bpw" → 2.75

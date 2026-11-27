@@ -11,22 +11,33 @@ struct OptionRow: View {
         model.config.assignment(for: option).included
     }
 
-    private var refusesForCurrentFamily: Bool {
-        option.unsupported.contains(model.family) && isPassed
+    private var currentValue: String? {
+        model.config.assignment(for: option).value.stringValue
+    }
+
+    /// The refusal that applies to the current family AND value, if any.
+    private var refusal: Refusal? {
+        guard isPassed else { return nil }
+        return option.refusal(family: model.family, value: currentValue)
     }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
             controls
             HStack(alignment: .top, spacing: 4) {
-                if refusesForCurrentFamily {
+                if let refusal {
                     Image(systemName: "exclamationmark.triangle.fill")
                         .foregroundStyle(.red)
-                        .help("\(model.family.label) refuses \(option.flagName) at load — sushi will stop with an error naming the flag.")
+                        .help(refusal.reason)
                 }
                 Text(option.help)
                     .font(.caption)
                     .foregroundStyle(.secondary)
+            }
+            if let refusal {
+                Text(refusal.reason)
+                    .font(.caption)
+                    .foregroundStyle(.red)
             }
         }
         .padding(.vertical, 1)
@@ -95,8 +106,10 @@ struct OptionRow: View {
     }
 
     private var defaultChoice: String {
-        if case .choice(let values) = option.kind { return values.first ?? "" }
-        return ""
+        // The CLI's documented default, not simply the first listed value:
+        // --prefill-chunk-max has no default among its rungs, and
+        // --kv-quant's default is 8 even though 16 is listed last.
+        option.choiceDefault ?? ""
     }
 
     /// Row with the "pass this flag" checkbox; the editor is the trailing control.

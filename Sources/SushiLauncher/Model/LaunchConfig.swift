@@ -23,10 +23,33 @@ struct OptionAssignment: Codable, Equatable {
 // MARK: - Launch configuration
 
 struct LaunchConfig: Codable, Equatable {
+    /// The shape this config was written in. A store describes its own
+    /// version; nothing ever guesses it by trying migrations until one
+    /// succeeds. Absent means 1 (written before the field existed).
+    var schemaVersion: Int = LaunchConfig.currentSchemaVersion
+
     var assignments: [String: OptionAssignment] = [:]
+
+    /// Bump when a migration is added. See ConfigMigration.
+    static let currentSchemaVersion = 2
 
     init() {}
     init(assignments: [String: OptionAssignment]) { self.assignments = assignments }
+
+    private enum CodingKeys: String, CodingKey {
+        case schemaVersion, assignments
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        // A missing stamp is version 1, not an anomaly: every config written
+        // before this field existed is exactly that, and the migration path
+        // from 1 is known. (A store whose version EXCEEDS this binary's is
+        // the case to refuse — see ConfigMigration.migrate.)
+        schemaVersion = try c.decodeIfPresent(Int.self, forKey: .schemaVersion) ?? 1
+        assignments = try c.decodeIfPresent([String: OptionAssignment].self,
+                                            forKey: .assignments) ?? [:]
+    }
 
     func assignment(for option: SushiOption) -> OptionAssignment {
         assignments[option.id] ?? LaunchConfig.defaultAssignment(for: option)

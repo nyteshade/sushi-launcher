@@ -45,7 +45,7 @@ struct SettingsView: View {
                     Button("Raise now…") { model.raiseGPULimitNow() }
                     Button("Check current") { model.checkGPULimit() }
                 }
-                Text("sushi bills big contexts against this limit; it resets at every reboot. 120000 MB ≈ 117 GiB (128 GB Macs).")
+                Text("Sets all three limits together, as sushi's docs require: \(GPULimit.sysctlKey)=\(model.settings.gpuLimitMB) and both user-wire limits to \(GPULimit.wireBytes(forMB: model.settings.gpuLimitMB)) bytes. Setting only the GPU key leaves macOS capping what sushi may wire at the lower value, and prefill slows with no error. All three reset at every reboot.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
             }
@@ -71,8 +71,8 @@ struct SettingsView: View {
 
             Section("Config files") {
                 HStack {
-                    Button("Reset launch config to start-sushi preset") {
-                        model.config = Preset.brie128.config
+                    Button("Reset launch config to this Mac's recipe") {
+                        model.applyPreset(Preset.thisMachine)
                     }
                     Button("Open config folder") {
                         UIActions.revealPath(Storage.applicationDirectory.path)

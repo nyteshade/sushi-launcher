@@ -17,8 +17,10 @@ struct LaunchPane: View {
 
     var body: some View {
         Form {
+            ConformanceSection()
             ModelSection(catalog: model.catalog)
             PresetSection()
+            LaunchIssuesSection()
             QuickSection()
             if model.settings.advancedOptions {
                 ForEach(OptionCategory.allCases) { category in
@@ -32,6 +34,7 @@ struct LaunchPane: View {
             }
         }
         .formStyle(.grouped)
+        .onAppear { model.checkConformance() }
     }
 
     @ViewBuilder
@@ -42,6 +45,108 @@ struct LaunchPane: View {
                 ForEach(rows) { option in
                     OptionRow(option: option)
                 }
+            }
+        }
+    }
+}
+
+// MARK: - CLI conformance banner
+//
+// The registry is a transcription of `sushi serve --help`, so it drifts when
+// sushi updates. This section is the report: what the installed binary no
+// longer accepts, what it accepts that the app cannot express, and what it
+// accepts and ignores. It is the reason the next version bump is noticed.
+
+private struct ConformanceSection: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        if let report = model.conformance, !report.isClean || report.failure != nil {
+            Section {
+                VStack(alignment: .leading, spacing: 6) {
+                    Label(report.summary, systemImage: "exclamationmark.triangle.fill")
+                        .foregroundStyle(.orange)
+                        .font(.callout)
+
+                    if !report.dead.isEmpty {
+                        Text("Removed by sushi — these flags now exit non-zero:")
+                            .font(.caption).foregroundStyle(.secondary)
+                        ForEach(report.dead) { dead in
+                            VStack(alignment: .leading, spacing: 1) {
+                                Text("--\(dead.id)")
+                                    .font(.system(size: 11, design: .monospaced))
+                                if dead.hasReplacement {
+                                    Text("→ use \(dead.replacements.map { "--" + $0 }.joined(separator: " / "))")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                } else {
+                                    Text(dead.message)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                            .padding(.leading, 8)
+                        }
+                    }
+
+                    if !report.missing.isEmpty {
+                        Text("Accepted by sushi, not modelled here: \(report.missing.map { "--" + $0 }.joined(separator: ", "))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                            .textSelection(.enabled)
+                    }
+
+                    if !report.inert.isEmpty {
+                        Text("Accepted and ignored by sushi: \(report.inert.map { "--" + $0 }.joined(separator: ", "))")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
+
+                    HStack {
+                        Button("Re-check") { model.checkConformance(force: true) }
+                            .controlSize(.small)
+                        if model.conformanceChecking {
+                            ProgressView().controlSize(.small)
+                        }
+                    }
+                }
+            } header: {
+                Text("sushi CLI conformance")
+            }
+        }
+    }
+}
+
+// MARK: - Launch issues
+//
+// Blocking issues are what the Start button refuses on. Showing them here
+// means the refusal is visible before the button is pressed.
+
+private struct LaunchIssuesSection: View {
+    @EnvironmentObject var model: AppModel
+
+    private var issues: [LaunchValidator.Issue] { model.launchIssues }
+
+    var body: some View {
+        if !issues.isEmpty {
+            Section {
+                ForEach(issues) { issue in
+                    HStack(alignment: .top, spacing: 6) {
+                        Image(systemName: issue.severity == .blocking
+                              ? "xmark.octagon.fill" : "exclamationmark.triangle.fill")
+                            .foregroundStyle(issue.severity == .blocking ? .red : .orange)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(issue.flag)
+                                .font(.system(size: 11, design: .monospaced))
+                            Text(issue.message)
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            } header: {
+                Text(model.blockingIssues.isEmpty
+                     ? "Warnings" : "Cannot launch — \(model.blockingIssues.count) blocking")
             }
         }
     }

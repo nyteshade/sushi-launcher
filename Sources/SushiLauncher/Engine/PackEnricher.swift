@@ -12,6 +12,9 @@ enum HFRepo {
         "glm-5.3-flash:2bpw":           "GLM-5.3-Flash-Sushi-2bpw",
         "glm-5.3-flash:2.4bpw":         "GLM-5.3-Flash-Sushi-2.4bpw",
         "deepseek-v4.1-flash:1.75bpw":  "DeepSeek-V4.1-Flash-1017-Sushi-STQ-1.75bpw",
+        "deepseek-v4.1-flash:2.7bpw":   "DeepSeek-V4.1-Flash-1017-Sushi-STQ-2.7bpw",
+        "hy4-flash:2.25bpw":            "Hy4-Flash-Sushi-STQ-2.25bpw",
+        "hy4-flash:4bpw":               "Hy4-Flash-Sushi-STQ-4bpw",
     ]
 
     static func repo(for packName: String) -> String? {
@@ -23,7 +26,8 @@ enum HFRepo {
             "qwen3.8-flash-next": "Qwen3.8-Flash-Next",
             "mimo-v2.6-flash":    "MiMo-V2.6-Flash",
             "glm-5.3-flash":      "GLM-5.3-Flash",
-            "deepseek-v4.1-flash": "DeepSeek-V4.1-Flash",
+            "deepseek-v4.1-flash": "DeepSeek-V4.1-Flash-1017",
+            "hy4-flash":          "Hy4-Flash",
         ]
         let head = famMap[family] ?? family
             .split(separator: "-")

@@ -15,12 +15,16 @@ menu-bar resident mode so the model can outlive the window.
 memorizing a launch ritual like this:
 
 ```sh
-sudo sysctl iogpu.wired_limit_mb=120000      # resets at every reboot — must be redone
+# The limit is a triple: the GPU key AND both user-wire limits, at the same
+# value in bytes. All three reset at every reboot.
+sudo sysctl iogpu.wired_limit_mb=120000 \
+            vm.global_user_wire_limit=125829120000 \
+            vm.user_wire_limit=125829120000
 sushi serve \
-  --model ~/.sushi/models/Qwen3.8-Flash-Next-Sushi-4bpw \
+  --model ~/.sushi/models/Qwen3.8-Flash-Next-Sushi-STQ-2.75bpw \
   --mtp --kv-quant 8 --mtp-head-kv-quant \
-  --ctx-size 1048576 --prefill-chunk 2048 --max-tokens 64000 \
-  --prefix-cache-disk 20GB --prefix-cache-entries 1 --temp 1
+  --ctx-size 1048576 --max-tokens 64000 \
+  --prefix-cache-disk 20GB --max-concurrent 1 --temp 1
 ```
 
 That is a *recipe*: which pack, which context, which quant, which cache

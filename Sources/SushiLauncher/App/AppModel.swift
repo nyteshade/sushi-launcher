@@ -25,6 +25,11 @@ final class AppModel: ObservableObject {
     }
     @Published var notice: Notice?
 
+    /// What the installed CLI actually accepts, diffed against the registry.
+    /// nil until the first check completes.
+    @Published private(set) var conformance: CLIConformance.Report?
+    @Published private(set) var conformanceChecking = false
+
     let server = ServerController()
     let catalog = ModelCatalog()
     let enricher = PackEnricher()
@@ -33,12 +38,28 @@ final class AppModel: ObservableObject {
     private var saveSettingsTask: Task<Void, Never>?
 
     init() {
-        config = Storage.loadConfig() ?? LaunchConfig(assignments: Preset.brie128.assignments)
+        config = Storage.loadConfig() ?? LaunchConfig(assignments: Preset.thisMachine.assignments)
         settings = Storage.loadSettings() ?? AppSettings()
         // NOTE: no catalog refresh here — mutating published state during
         // AppModel.init runs while SwiftUI builds scenes and can re-enter
         // the app graph (launch crash). Views call refreshCatalog() from
         // their lifetime handlers instead.
+    }
+
+    /// Bring the loaded config up to the current schema and reconcile it
+    /// against the installed CLI. Called once the conformance report exists,
+    /// because the drop pass needs to know what the binary rejects.
+    private func migrateConfigIfNeeded() {
+        let outcome = ConfigMigration.migrate(config, conformance: conformance)
+        if outcome.didChange {
+            config = outcome.config
+            notice = Notice(kind: .info, title: "Launch config updated",
+                            message: outcome.changes.joined(separator: "\n"))
+        }
+        if !outcome.warnings.isEmpty {
+            notice = Notice(kind: .warning, title: "Launch config",
+                            message: outcome.warnings.joined(separator: "\n\n"))
+        }
     }
 
     // MARK: Derived
@@ -52,6 +73,38 @@ final class AppModel: ObservableObject {
 
     var family: ModelFamily { config.family }
 
+    /// Everything wrong with the current configuration, given the installed
+    /// CLI and the model family it targets. The single decision point: the
+    /// Start button, the command preview and the drift banner all read it.
+    var launchIssues: [LaunchValidator.Issue] {
+        LaunchValidator.issues(config: config, conformance: conformance)
+    }
+
+    var blockingIssues: [LaunchValidator.Issue] {
+        LaunchValidator.blocking(launchIssues)
+    }
+
+    // MARK: Conformance
+
+    /// Re-read the installed binary's help and diff it against the registry.
+    func checkConformance(force: Bool = false) {
+        guard !conformanceChecking else { return }
+        if !force, conformance != nil { return }
+        conformanceChecking = true
+        let custom = settings.sushiPathOverride
+        Task.detached(priority: .utility) { [weak self] in
+            let report = CLIConformance.check(customPath: custom)
+            await MainActor.run { [weak self] in
+                guard let self else { return }
+                self.conformanceChecking = false
+                self.conformance = report
+                // The report is what the migration's drop pass needs, so the
+                // config is reconciled the moment it lands.
+                self.migrateConfigIfNeeded()
+            }
+        }
+    }
+
     // MARK: Server actions
 
     func start() {
@@ -59,6 +112,14 @@ final class AppModel: ObservableObject {
         guard resolvedBinary != nil else {
             notice = Notice(kind: .error, title: "sushi not found",
                             message: "Install with `brew install beamivalice/tap/sushi`, or set the binary path in Settings (⌘,).")
+            return
+        }
+        // Refuse a configuration the installed CLI will reject, rather than
+        // launching into a failure 30 seconds into a model load.
+        let blocking = blockingIssues
+        if !blocking.isEmpty {
+            notice = Notice(kind: .error, title: "Cannot launch",
+                            message: blocking.map { "\($0.flag): \($0.message)" }.joined(separator: "\n\n"))
             return
         }
         if settings.raiseGPUBeforeLaunch {
@@ -102,6 +163,12 @@ final class AppModel: ObservableObject {
 
     func applyPreset(_ preset: Preset) {
         config = preset.config
+        // A recipe's GPU limit is part of the recipe: the docs pair each one
+        // with a specific wired limit, and getting it wrong is a refusal or a
+        // panic. Carry it across so the two cannot drift apart.
+        if let mb = preset.gpuLimitMB, settings.gpuLimitMB != mb {
+            settings.gpuLimitMB = mb
+        }
         notice = Notice(title: "Preset applied", message: preset.name)
     }
 
@@ -176,15 +243,16 @@ final class AppModel: ObservableObject {
 
     func raiseGPULimitNow() {
         let mb = settings.gpuLimitMB
+        let bytes = GPULimit.wireBytes(forMB: mb)
         notice = Notice(title: "Raise GPU wired limit",
-                        message: "macOS will ask for your password or Touch ID to set \(GPULimit.sysctlKey)=\(mb).")
+                        message: "macOS will ask for your password or Touch ID to set \(GPULimit.sysctlKey)=\(mb) and both user-wire limits to \(bytes) bytes.")
         Task.detached(priority: .userInitiated) { [weak self] in
             let ok = GPULimit.raise(mb: mb)
             await MainActor.run { [weak self] in
                 guard let self else { return }
                 self.notice = Notice(kind: ok ? .success : .warning, title: "GPU wired limit",
                                      message: ok
-                                        ? "\(GPULimit.sysctlKey)=\(mb) is set. Remember: it resets at every reboot."
+                                        ? "\(GPULimit.sysctlKey)=\(mb) and both user-wire limits are set to \(bytes) bytes. Remember: all three reset at every reboot."
                                         : "Not applied (authorization declined or failed).")
             }
         }
@@ -193,13 +261,21 @@ final class AppModel: ObservableObject {
     func checkGPULimit() {
         let target = settings.gpuLimitMB
         Task.detached(priority: .utility) { [weak self] in
-            let current = GPULimit.currentMB()
+            let state = GPULimit.readState()
             await MainActor.run { [weak self] in
                 guard let self else { return }
-                self.notice = Notice(title: "GPU wired limit",
-                                     message: current.map {
-                                        "\($0) MB right now; this app targets \(target) MB. The limit resets at every reboot."
-                                     } ?? "Could not read \(GPULimit.sysctlKey).")
+                guard let gpu = state.gpuMB else {
+                    self.notice = Notice(title: "GPU wired limit",
+                                         message: "Could not read \(GPULimit.sysctlKey).")
+                    return
+                }
+                if let problem = GPULimit.inconsistencyNote(state) {
+                    self.notice = Notice(kind: .warning, title: "GPU wired limit",
+                                         message: problem + "\n\nRaise it again to set all three.")
+                } else {
+                    self.notice = Notice(title: "GPU wired limit",
+                                         message: "\(gpu) MB right now, with both user-wire limits matching at \(GPULimit.wireBytes(forMB: gpu)) bytes. This app targets \(target) MB. All three reset at every reboot.")
+                }
             }
         }
     }
@@ -223,6 +299,9 @@ final class AppModel: ObservableObject {
                 self.notice = Notice(title: "sushi --version", message: text.isEmpty ? "(no output)" : text)
             }
         }
+        // A version change is exactly when the registry can drift, so the
+        // version check re-runs conformance too.
+        checkConformance(force: true)
     }
 
     // MARK: Bindings for the form

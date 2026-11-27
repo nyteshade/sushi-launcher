@@ -26,13 +26,20 @@ cp -X icons/sushi-launcher-squircle.png "$APP/Contents/Resources/sushi-launcher-
 
 # Menu bar glyph. ANY PNG works — the app masks it to a template at runtime
 # (dark strokes become the glyph, light areas become transparent). Ideal:
-# black artwork on white or transparent, square-ish. Preference order:
-#   icons/sushi-menuTemplate.png  (checked-in artwork)
-#   ~/Desktop/sushi-launcher.png  (local drop)
-#   icons/sushi-launcher-plain.png (fallback)
+# black artwork on white or transparent, square-ish.
+#
+# The checked-in artwork is the ONLY source. It used to fall back to
+# ~/Desktop/sushi-launcher.png and then to the app icon, which meant a build
+# on a machine without that Desktop file silently shipped a DIFFERENT glyph —
+# the menu bar icon changed with no warning and nothing in git to explain it.
+# A missing glyph is now a build error, not a substitution.
 MENU_ICON="icons/sushi-menuTemplate.png"
-[[ -f "$MENU_ICON" ]] || MENU_ICON="${HOME}/Desktop/sushi-launcher.png"
-[[ -f "$MENU_ICON" ]] || MENU_ICON="icons/sushi-launcher-plain.png"
+if [[ ! -f "$MENU_ICON" ]]; then
+  echo "✗ Missing menu bar glyph: $MENU_ICON" >&2
+  echo "  The menu bar icon is checked-in artwork; it has no fallback." >&2
+  echo "  Restore it from git: git checkout -- $MENU_ICON" >&2
+  exit 1
+fi
 cp -X "$MENU_ICON" "$APP/Contents/Resources/menu-icon.png"
 
 printf 'APPL????' > "$APP/Contents/PkgInfo"

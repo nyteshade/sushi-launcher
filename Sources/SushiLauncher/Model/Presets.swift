@@ -1,20 +1,6 @@
 import Foundation
 
-// MARK: - Presets ("launch recipes")
-//
-// Built from docs/usage.md's "Recommended launch" section. Each carries a
-// group (menu organization) and an explanation (what the recipe is for,
-// which Mac, what to set first). Applying a preset REPLACES all assignments.
-//
-// Two rules keep these honest:
-//
-//  1. A recipe's flags are the DOCUMENTED ones, not a remembered version of
-//     them. sushi 1.8.1 removed --prefill-chunk and --prefix-cache-entries;
-//     the recipes below use --prefill-chunk-max and --max-concurrent, which
-//     are what the CLI now accepts.
-//  2. A recipe's model path is RESOLVED, not assumed. The docs write
-//     `~/.sushi/models/beamster/<repo>`; `sushi pull` on this machine lands
-//     the pack at `~/.sushi/models/<repo>`. ModelPath checks both.
+// MARK: - Model path resolution
 
 enum ModelPath {
     /// Where `sushi pull` puts a pack on this machine, preferring whichever
@@ -33,255 +19,141 @@ enum ModelPath {
     }
 }
 
-struct Preset: Identifiable {
+// MARK: - Documented intent
+//
+// The docs' launch recipes, expressed as INTENT rather than as flag lists.
+// Each one is (pack, context, posture, KV quality) — the same three answers
+// the chooser asks for — so a recipe can be reproduced by the derivation and
+// a new Mac size needs no new recipe.
+//
+// These exist to be *examples*: the chooser derives from intent, and these
+// show what the docs recommend for a given Mac. A recipe that disagrees with
+// the derivation is a signal that the memory model is wrong, which is why
+// they are kept as data rather than as pre-built configs.
+
+struct DocumentedIntent: Identifiable {
     let id: String
     let name: String
-    let assignments: [String: OptionAssignment]
-    var group: String = "Recipes"
+    let packRepo: String
+    let contextTokens: Int
+    let posture: MemoryPosture
+    let kv: KVQuality
+    let ramGB: Int
+    var group: String = "Documented"
     var explain: String = ""
-    /// The GPU wired limit the docs pair with this recipe, in MB.
-    var gpuLimitMB: Int? = nil
 
-    var config: LaunchConfig { LaunchConfig(assignments: assignments) }
-
-    private static func map(_ pairs: [(String, FlagValue)]) -> [String: OptionAssignment] {
-        var d = [String: OptionAssignment]()
-        for (id, value) in pairs {
-            d[id] = OptionAssignment(included: true, value: value)
-        }
-        return d
+    /// Derive the configuration this intent describes.
+    func derive() -> ConfigDeriver.Derived {
+        ConfigDeriver.derive(packName: packRepo,
+                             contextTokens: contextTokens,
+                             ramGB: ramGB,
+                             posture: posture,
+                             kv: kv,
+                             profile: PackKnowledge.profile(for: packRepo))
     }
 
-    /// A recipe's model row, resolved to a path that exists on this machine.
-    private static func model(_ repo: String) -> (String, FlagValue) {
-        ("model", .string(ModelPath.resolve(repo: repo)))
-    }
+    /// The GPU limit the docs pair with this recipe.
+    var gpuLimitMB: Int { derive().gpuLimitMB }
+}
 
-    // MARK: This machine
-
-    /// The pack actually installed here: Qwen3.8-Flash-Next STQ 2.75bpw.
-    ///
-    /// The docs give 2.75bpw a 64 GB recipe (250k context, 8-bit KV) because
-    /// that is the smallest Mac it fits. This Mac is 128 GB, so the context
-    /// is set from the memory arithmetic rather than from that tier:
-    /// 46.4 GiB of resident weights + 23.1 GiB of 8-bit KV at 1M tokens =
-    /// 69.5 GiB (the docs' own 1M-context anchor for this pack), inside the
-    /// 117 GiB a 120000 MB wired limit allows. The 29.8 GiB n-gram table is
-    /// memory-mapped from SSD and is not part of that sum.
-    static let thisMachine = Preset(
-        id: "machine-qwen-stq-275-128",
-        name: "Qwen STQ 2.75bpw · 128 GB (this Mac)",
-        assignments: map([
-            model("Qwen3.8-Flash-Next-Sushi-STQ-2.75bpw"),
-            ("mtp", .bool(true)),
-            ("kv-quant", .string("8")),
-            ("mtp-head-kv-quant", .bool(true)),
-            ("ctx-size", .int(1_048_576)),
-            ("max-tokens", .int(64_000)),
-            ("prefix-cache-disk", .string("20GB")),
-            ("max-concurrent", .int(1)),
-            ("temp", .double(1)),
-        ]),
-        group: "This machine",
-        explain: "The 2.75bpw STQ pack at the full 1M context on a 128 GB Mac — MTP on, 8-bit KV (also in the MTP head), 20 GB SSD prefix cache sized for one conversation. The docs' 250k figure for this pack is the 64 GB tier; 46.4 GiB of weights plus 23.1 GiB of KV at 1M is 69.5 GiB, well inside a 120000 MB limit. Raise the limit first (Server ▸ Raise GPU Memory Limit, ⌥⌘G).",
-        gpuLimitMB: 120_000
-    )
-
-    // MARK: Documented recipes
-
-    static let builtIn: [Preset] = [
-        thisMachine,
-
+enum DocumentedRecipes {
+    static let all: [DocumentedIntent] = [
         // ── Qwen ──────────────────────────────────────────────────────
-        Preset(
+        DocumentedIntent(
             id: "qwen-2bpw-48",
-            name: "Qwen 2bpw · 48 GB",
-            assignments: map([
-                model("Qwen3.8-Flash-Next-Sushi-2bpw"),
-                ("mtp", .bool(true)),
-                ("kv-quant", .string("8")),
-                ("mtp-head-kv-quant", .bool(true)),
-                ("qwen-gdn", .string("16")),
-                ("ctx-size", .int(131_072)),
-                ("max-tokens", .int(32_000)),
-                ("prefix-cache-disk", .string("20GB")),
-                ("temp", .double(1)),
-            ]),
+            name: "Qwen 2bpw · 48 GB Mac",
+            packRepo: "Qwen3.8-Flash-Next-Sushi-2bpw",
+            contextTokens: 131_072, posture: .maximum, kv: .quality, ramGB: 48,
             group: "Qwen",
-            explain: "Docs recipe for 48 GB Macs: the 2 bpw pack, 128k context, bf16 GatedDeltaNet state (--qwen-gdn 16) to fit. GPU limit 43000 MB.",
-            gpuLimitMB: 43_000
-        ),
-        Preset(
+            explain: "The docs' 48 GB recipe: 128k context, bf16 GatedDeltaNet state to fit."),
+        DocumentedIntent(
             id: "qwen-stq-275-64",
-            name: "Qwen STQ 2.75bpw · 64 GB",
-            assignments: map([
-                model("Qwen3.8-Flash-Next-Sushi-STQ-2.75bpw"),
-                ("mtp", .bool(true)),
-                ("kv-quant", .string("8")),
-                ("mtp-head-kv-quant", .bool(true)),
-                ("qwen-gdn", .string("16")),
-                ("ctx-size", .int(250_000)),
-                ("max-tokens", .int(32_000)),
-                ("prefix-cache-disk", .string("20GB")),
-                ("temp", .double(1)),
-            ]),
+            name: "Qwen STQ 2.75bpw · 64 GB Mac",
+            packRepo: "Qwen3.8-Flash-Next-Sushi-STQ-2.75bpw",
+            contextTokens: 262_144, posture: .maximum, kv: .quality, ramGB: 64,
             group: "Qwen",
-            explain: "64 GB, STQ 2.75bpw at 250k context with 8-bit KV (the quality default). For ~1.8× the context switch the KV quant to 4 and raise ctx-size to ~450000 by hand. GPU limit 59000 MB — above it macOS runs out of memory first and the kernel panics, so don't.",
-            gpuLimitMB: 59_000
-        ),
-        Preset(
+            explain: "The docs' 64 GB recipe: 250k context at 8-bit KV. Above a 59000 MB limit macOS runs out of memory first and the kernel panics."),
+        DocumentedIntent(
             id: "qwen-4bpw-96",
-            name: "Qwen 4bpw · 96 GB+",
-            assignments: map([
-                model("Qwen3.8-Flash-Next-Sushi-4bpw"),
-                ("mtp", .bool(true)),
-                ("kv-quant", .string("8")),
-                ("mtp-head-kv-quant", .bool(true)),
-                ("ctx-size", .int(500_000)),
-                ("prefill-chunk-max", .string("2048")),
-                ("max-tokens", .int(64_000)),
-                ("prefix-cache-disk", .string("20GB")),
-                ("temp", .double(1)),
-            ]),
+            name: "Qwen 4bpw · 96 GB Mac",
+            packRepo: "Qwen3.8-Flash-Next-Sushi-4bpw",
+            contextTokens: 524_288, posture: .maximum, kv: .quality, ramGB: 96,
             group: "Qwen",
-            explain: "The docs' 96 GB+ recipe: 4 bpw at 500k context, 8-bit KV, prefill capped at 2048 rows. GPU limit 90000 MB on 96 GB, 120000 on 128 GB. DFlash2 is opt-in on Qwen via --drafter; MTP stays the default.",
-            gpuLimitMB: 120_000
-        ),
+            explain: "The docs' 96 GB+ recipe: 500k context, 8-bit KV, prefill capped at 2048 rows."),
 
         // ── MiMo ──────────────────────────────────────────────────────
-        Preset(
+        DocumentedIntent(
             id: "mimo-23-128",
-            name: "MiMo 2.3bpw · 128 GB (unsupported)",
-            assignments: map([
-                model("MiMo-V2.6-Flash-Sushi-2.3bpw"),
-                ("ctx-size", .int(1_048_576)),
-            ]),
+            name: "MiMo 2.3bpw · 128 GB Mac",
+            packRepo: "MiMo-V2.6-Flash-Sushi-2.3bpw",
+            contextTokens: 1_048_576, posture: .maximum, kv: .quality, ramGB: 128,
             group: "MiMo",
-            explain: "MiMo at the full 1M context; MTP, 8-bit KV and thinking are on by default, so the recipe is just the size. UNSUPPORTED: it still loads, but sushi has not tested, benchmarked or tuned it since 1.5.1 — 1.5.0 was the last release that supported it. GPU limit 120000 MB.",
-            gpuLimitMB: 120_000
-        ),
+            explain: "Full 1M context; MTP, 8-bit KV and thinking are on by default. UNSUPPORTED since sushi 1.5.1 — it loads, but is no longer tested or tuned."),
 
         // ── GLM ───────────────────────────────────────────────────────
-        Preset(
+        DocumentedIntent(
             id: "glm-2-96",
-            name: "GLM 2bpw · 96 GB",
-            assignments: map([
-                model("GLM-5.3-Flash-Sushi-2bpw"),
-            ]),
+            name: "GLM 2bpw · 96 GB Mac",
+            packRepo: "GLM-5.3-Flash-Sushi-2bpw",
+            contextTokens: 524_288, posture: .maximum, kv: .quality, ramGB: 96,
             group: "GLM",
-            explain: "GLM 2 bpw with sushi's defaults: images, video, 8-bit KV and DFlash2 on, up to four requests decoding together. Auto context is 512K at 8-bit KV, 300K with --kv-quant 16. GPU limit 90000 MB.",
-            gpuLimitMB: 90_000
-        ),
-        Preset(
+            explain: "Images, video, 8-bit KV and DFlash2 on by default; up to four requests decode together."),
+        DocumentedIntent(
             id: "glm-24-128",
-            name: "GLM 2.4bpw · 128 GB",
-            assignments: map([
-                model("GLM-5.3-Flash-Sushi-2.4bpw"),
-            ]),
+            name: "GLM 2.4bpw · 128 GB Mac",
+            packRepo: "GLM-5.3-Flash-Sushi-2.4bpw",
+            contextTokens: 524_288, posture: .maximum, kv: .quality, ramGB: 128,
             group: "GLM",
-            explain: "GLM 2.4 bpw with defaults (images + video, DFlash2 built into the pack). The pack ships Inco.ai's assistant under CC BY-NC-ND 4.0 — the smaller copy sushi builds in dflash2/ is a derivative, so keep it local. GPU limit 120000 MB.",
-            gpuLimitMB: 120_000
-        ),
+            explain: "GLM 2.4 bpw with defaults. The pack ships Inco.ai's DFlash2 assistant under CC BY-NC-ND 4.0 — keep the built copy local."),
 
         // ── DeepSeek ──────────────────────────────────────────────────
-        Preset(
+        DocumentedIntent(
             id: "deepseek-175-128",
-            name: "DeepSeek 1.75bpw · 128 GB (SSD-streamed)",
-            assignments: map([
-                model("DeepSeek-V4.1-Flash-1017-Sushi-STQ-1.75bpw"),
-                ("ssd-budget-gb", .int(108)),
-                ("ctx-size", .int(1_000_000)),
-                ("max-tokens", .int(128_000)),
-            ]),
+            name: "DeepSeek 1.75bpw · 128 GB (streamed)",
+            packRepo: "DeepSeek-V4.1-Flash-1017-Sushi-STQ-1.75bpw",
+            contextTokens: 1_000_000, posture: .maximum, kv: .quality, ramGB: 128,
             group: "DeepSeek",
-            explain: "DeepSeek streams its routed experts from SSD: 108 GiB resident (the recommended 128 GB budget), 1M context, 128k max tokens. The 108 default needs the GPU limit at 125000; without it sushi picks 96 and steps down further, saying so. Pass --ssd-budget-gb 96 to leave memory to other apps.",
-            gpuLimitMB: 125_000
-        ),
-        Preset(
+            explain: "Routed experts stream from SSD. The 108 GiB default needs the GPU limit at 125000; without it sushi picks 96 and steps down further, saying so."),
+        DocumentedIntent(
             id: "deepseek-27-256",
-            name: "DeepSeek 2.7bpw · 256 GB (fully resident)",
-            assignments: map([
-                model("DeepSeek-V4.1-Flash-1017-Sushi-STQ-2.7bpw"),
-            ]),
+            name: "DeepSeek 2.7bpw · 256 GB (resident)",
+            packRepo: "DeepSeek-V4.1-Flash-1017-Sushi-STQ-2.7bpw",
+            contextTokens: 1_000_000, posture: .maximum, kv: .quality, ramGB: 256,
             group: "DeepSeek",
-            explain: "KLD 0.0607 against 0.1525 for the 1.75bpw pack, and every routed expert resident at the RAM default — no SSD reads, no limit to raise. On 64/96 GB Macs it streams with --expert-cache-bias instead.",
-            gpuLimitMB: 250_000
-        ),
+            explain: "KLD 0.0607 against 0.1525 for the 1.75bpw pack, every routed expert resident — no SSD reads, no limit to raise."),
 
         // ── Hy4 ───────────────────────────────────────────────────────
-        Preset(
+        DocumentedIntent(
             id: "hy4-225-48",
             name: "Hy4 2.25bpw · 48 GB (streamed)",
-            assignments: map([
-                model("Hy4-Flash-Sushi-STQ-2.25bpw"),
-                ("ssd-budget-gb", .int(34)),
-                ("expert-cache-bias", .double(0.2)),
-                ("ctx-size", .int(200_000)),
-            ]),
+            packRepo: "Hy4-Flash-Sushi-STQ-2.25bpw",
+            contextTokens: 200_000, posture: .maximum, kv: .quality, ramGB: 48,
             group: "Hy4",
-            explain: "48 GB: experts streamed within a 34 GB budget at a 200k context. --expert-cache-bias 0.2 favours the experts already in memory, which is lossy. GPU limit 44000 MB.",
-            gpuLimitMB: 44_000
-        ),
-        Preset(
+            explain: "Experts streamed within a 34 GB budget at a 200k context; --expert-cache-bias 0.2 favours experts already in memory, which is lossy."),
+        DocumentedIntent(
             id: "hy4-225-64",
             name: "Hy4 2.25bpw · 64 GB",
-            assignments: map([
-                model("Hy4-Flash-Sushi-STQ-2.25bpw"),
-                ("ctx-size", .int(500_000)),
-            ]),
+            packRepo: "Hy4-Flash-Sushi-STQ-2.25bpw",
+            contextTokens: 524_288, posture: .maximum, kv: .quality, ramGB: 64,
             group: "Hy4",
-            explain: "64 GB, 500k context. With no budget flag the load holds all 512 experts per layer when 46.2 GB is free (33-35 tok/s decode, 495-552 tok/s prefill at 1-7K tokens on an M5 Pro); otherwise it streams at the largest budget that fits. --no-vision --no-mtp holds them all in 44.8 GB. GPU limit 60000 MB.",
-            gpuLimitMB: 60_000
-        ),
-        Preset(
+            explain: "500k context. With no budget flag the load holds all 512 experts per layer when 46.2 GB is free; otherwise it streams at the largest budget that fits."),
+        DocumentedIntent(
             id: "hy4-4-96",
             name: "Hy4 4bpw · 96 GB",
-            assignments: map([
-                model("Hy4-Flash-Sushi-STQ-4bpw"),
-                ("ctx-size", .int(500_000)),
-            ]),
+            packRepo: "Hy4-Flash-Sushi-STQ-4bpw",
+            contextTokens: 524_288, posture: .maximum, kv: .quality, ramGB: 96,
             group: "Hy4",
-            explain: "96 GB, 4 bpw at a 500k context. GPU limit 92000 MB.",
-            gpuLimitMB: 92_000
-        ),
-        Preset(
+            explain: "4 bpw at a 500k context."),
+        DocumentedIntent(
             id: "hy4-4-128",
-            name: "Hy4 4bpw · 128 GB · full 1M ctx",
-            assignments: map([
-                model("Hy4-Flash-Sushi-STQ-4bpw"),
-                ("ctx-size", .int(1_048_576)),
-            ]),
+            name: "Hy4 4bpw · 128 GB · full 1M",
+            packRepo: "Hy4-Flash-Sushi-STQ-4bpw",
+            contextTokens: 1_048_576, posture: .maximum, kv: .quality, ramGB: 128,
             group: "Hy4",
-            explain: "128 GB, 4 bpw at the full 1,048,576-token context. GPU limit 125000 MB.",
-            gpuLimitMB: 125_000
-        ),
-
-        // ── Start over ────────────────────────────────────────────────
-        Preset(
-            id: "minimal",
-            name: "No flags (sushi defaults)",
-            assignments: map([
-                ("model", .string("~/.sushi/models")),
-            ]),
-            group: "Start over",
-            explain: "Clears everything: sushi picks the model directory, context, KV and cache defaults. A good base for a from-scratch config."
-        ),
+            explain: "4 bpw at the full 1,048,576-token context."),
     ]
 
-    static func preset(id: String) -> Preset? {
-        builtIn.first { $0.id == id }
-    }
-
-    /// The recipe whose GPU limit matches a Mac of `ramGB`, preferring the
-    /// documented tier. Used to suggest a starting point.
-    static func suggested(forRAMGB ramGB: Int) -> Preset? {
-        let tiers: [(Int, String)] = [
-            (48, "qwen-2bpw-48"), (64, "qwen-stq-275-64"), (96, "qwen-4bpw-96"),
-            (128, "machine-qwen-stq-275-128"), (256, "deepseek-27-256"),
-        ]
-        let match = tiers.first { ramGB <= $0.0 } ?? tiers.last!
-        return preset(id: match.1)
-    }
+    static func recipe(id: String) -> DocumentedIntent? { all.first { $0.id == id } }
 }
 
 // MARK: - App settings
@@ -300,12 +172,20 @@ struct AppSettings: Codable, Equatable {
     var advancedOptions: Bool = false
     var hideDockWhenNoWindows: Bool = true
 
+    /// The chooser's remembered intent, so reopening the app shows the same
+    /// answers rather than re-deriving from scratch.
+    var chosenPack: String = ""
+    var chosenContextTokens: Int = 131_072
+    var chosenPosture: MemoryPosture = .balanced
+    var chosenKV: KVQuality = .quality
+
     init() {}
 
     private enum CodingKeys: String, CodingKey {
         case sushiPathOverride, gpuLimitMB, raiseGPUBeforeLaunch, autoParentPid
         case autoscroll, showTimestamps, consoleVisible, advancedOptions
         case hideDockWhenNoWindows
+        case chosenPack, chosenContextTokens, chosenPosture, chosenKV
     }
 
     init(from decoder: Decoder) throws {
@@ -319,5 +199,9 @@ struct AppSettings: Codable, Equatable {
         consoleVisible       = try c.decodeIfPresent(Bool.self, forKey: .consoleVisible) ?? true
         advancedOptions       = try c.decodeIfPresent(Bool.self, forKey: .advancedOptions) ?? false
         hideDockWhenNoWindows = try c.decodeIfPresent(Bool.self, forKey: .hideDockWhenNoWindows) ?? true
+        chosenPack            = try c.decodeIfPresent(String.self, forKey: .chosenPack) ?? ""
+        chosenContextTokens   = try c.decodeIfPresent(Int.self, forKey: .chosenContextTokens) ?? 131_072
+        chosenPosture         = try c.decodeIfPresent(MemoryPosture.self, forKey: .chosenPosture) ?? .balanced
+        chosenKV              = try c.decodeIfPresent(KVQuality.self, forKey: .chosenKV) ?? .quality
     }
 }

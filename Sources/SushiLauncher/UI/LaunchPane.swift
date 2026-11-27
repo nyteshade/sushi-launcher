@@ -19,7 +19,8 @@ struct LaunchPane: View {
         Form {
             ConformanceSection()
             ModelSection(catalog: model.catalog)
-            PresetSection()
+            ConfigChooser()
+            RecipeSection()
             LaunchIssuesSection()
             QuickSection()
             if model.settings.advancedOptions {
@@ -251,50 +252,48 @@ private struct ModelSection: View {
     }
 }
 
-// MARK: - Launch recipes
+// MARK: - Documented recipes
+//
+// The docs' recipes, offered as starting points. Each is derived from intent
+// rather than stored as a flag list, so picking one and then changing the
+// context keeps the rest of the configuration coherent.
 
-private struct PresetSection: View {
+private struct RecipeSection: View {
     @EnvironmentObject var model: AppModel
 
-    private var grouped: [(group: String, presets: [Preset])] {
-        var out: [(String, [Preset])] = []
-        for preset in Preset.builtIn {
-            if let index = out.firstIndex(where: { $0.0 == preset.group }) {
-                out[index].1.append(preset)
+    private var grouped: [(group: String, recipes: [DocumentedIntent])] {
+        var out: [(String, [DocumentedIntent])] = []
+        for recipe in DocumentedRecipes.all {
+            if let index = out.firstIndex(where: { $0.0 == recipe.group }) {
+                out[index].1.append(recipe)
             } else {
-                out.append((preset.group, [preset]))
+                out.append((recipe.group, [recipe]))
             }
         }
-        return out.map { (group: $0.0, presets: $0.1) }
+        return out.map { (group: $0.0, recipes: $0.1) }
     }
 
     var body: some View {
-        Section("Launch recipe") {
+        Section("Documented recipes") {
             HStack {
                 Menu {
                     ForEach(grouped, id: \.group) { entry in
                         Section(entry.group) {
-                            ForEach(entry.presets) { preset in
-                                Button(preset.name) { model.applyPreset(preset) }
+                            ForEach(entry.recipes) { recipe in
+                                Button(recipe.name) { model.applyRecipe(recipe) }
                             }
                         }
                     }
                 } label: {
-                    Label(model.matchedPresetName, systemImage: "list.bullet.rectangle.portrait")
+                    Label("Start from a documented recipe", systemImage: "list.bullet.rectangle.portrait")
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
                 Spacer()
             }
-            if let explain = model.matchedPreset?.explain, !explain.isEmpty {
-                Text(explain)
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                Text("Custom configuration — pick a recipe to start with, then tune anything below.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+            Text("Each recipe is the docs' recommendation for a specific Mac. Picking one fills in the chooser above, so you can then adjust the context or posture and everything else follows.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 }

@@ -78,6 +78,21 @@ enum PackKnowledge {
         return Double(numeric)
     }
 
+    /// The derivation inputs for a pack: its memory anchors and its
+    /// documented minimum Mac. This is what a new pack needs — not a preset
+    /// per Mac size.
+    static func profile(for packName: String) -> PackProfile {
+        let family = ModelFamily.detect(from: packName)
+        let info = familyInfo[family]
+        return PackProfile(
+            family: family,
+            weightsAnchors: (info?.weights ?? []).map { (bpw: $0.0, gib: $0.1) },
+            minMacGB: info?.minMac.first?.1 ?? 48,
+            streamsExperts: family == .deepseek || family == .hy4,
+            hasNgramTable: family != .deepseek
+        )
+    }
+
     static func facts(for pack: SushiPack) -> PackFacts {
         let family = ModelFamily.detect(from: pack.name)
         let bpw = bpw(from: pack.name)

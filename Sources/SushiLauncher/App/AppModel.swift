@@ -38,7 +38,7 @@ final class AppModel: ObservableObject {
     private var saveSettingsTask: Task<Void, Never>?
 
     init() {
-        config = Storage.loadConfig() ?? LaunchConfig(assignments: Preset.thisMachine.assignments)
+        config = Storage.loadConfig() ?? AppModel.defaultConfig()
         settings = Storage.loadSettings() ?? AppSettings()
         // NOTE: no catalog refresh here — mutating published state during
         // AppModel.init runs while SwiftUI builds scenes and can re-enter
@@ -161,23 +161,56 @@ final class AppModel: ObservableObject {
 
     // MARK: Presets & models
 
-    func applyPreset(_ preset: Preset) {
-        config = preset.config
-        // A recipe's GPU limit is part of the recipe: the docs pair each one
-        // with a specific wired limit, and getting it wrong is a refusal or a
-        // panic. Carry it across so the two cannot drift apart.
-        if let mb = preset.gpuLimitMB, settings.gpuLimitMB != mb {
-            settings.gpuLimitMB = mb
+    /// Apply a configuration the chooser derived from intent.
+    func applyDerived(_ derived: ConfigDeriver.Derived) {
+        config = derived.config
+        if settings.gpuLimitMB != derived.gpuLimitMB {
+            settings.gpuLimitMB = derived.gpuLimitMB
         }
-        notice = Notice(title: "Preset applied", message: preset.name)
+        notice = Notice(kind: derived.fits ? .success : .warning,
+                        title: "Configuration applied",
+                        message: derived.rationale.joined(separator: "\n"))
     }
 
-    var matchedPreset: Preset? {
-        Preset.builtIn.first { $0.assignments == config.assignments }
+    /// Apply a documented recipe by deriving it, so the recipe and the
+    /// chooser can never disagree about what a given Mac should run.
+    func applyRecipe(_ recipe: DocumentedIntent) {
+        let derived = recipe.derive()
+        config = derived.config
+        settings.gpuLimitMB = derived.gpuLimitMB
+        settings.chosenContextTokens = recipe.contextTokens
+        settings.chosenPosture = recipe.posture
+        settings.chosenKV = recipe.kv
+        notice = Notice(kind: derived.fits ? .success : .warning,
+                        title: recipe.name,
+                        message: recipe.explain)
     }
 
-    var matchedPresetName: String {
-        matchedPreset?.name ?? "Custom configuration"
+    /// The documented recipe whose derived config matches the current one,
+    /// if any. Used to label the configuration honestly.
+    var matchedRecipe: DocumentedIntent? {
+        DocumentedRecipes.all.first { $0.derive().config.assignments == config.assignments }
+    }
+
+    var matchedRecipeName: String {
+        matchedRecipe?.name ?? "Custom configuration"
+    }
+
+    /// The configuration a fresh install starts from: this Mac's own
+    /// arithmetic, not a recipe transcribed for some other Mac.
+    static func defaultConfig() -> LaunchConfig {
+        let ram = MemoryModel.ramGB()
+        let pack = "Qwen3.8-Flash-Next-Sushi-STQ-2.75bpw"
+        let profile = PackKnowledge.profile(for: pack)
+        let weights = profile.weightsGiB(atBPW: PackKnowledge.bpw(from: pack) ?? 2.75) ?? 46.4
+        let context = MemoryModel.maxContextTokens(weightsGiB: weights, kvQuant: 8,
+                                                   family: profile.family, ramGB: ram) ?? 131_072
+        return ConfigDeriver.derive(packName: pack,
+                                    contextTokens: context,
+                                    ramGB: ram,
+                                    posture: .balanced,
+                                    kv: .quality,
+                                    profile: profile).config
     }
 
     /// Choose a curated pack from `sushi list` as the launch model.

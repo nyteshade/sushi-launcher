@@ -71,8 +71,8 @@ struct SettingsView: View {
 
             Section("Config files") {
                 HStack {
-                    Button("Reset launch config to this Mac's recipe") {
-                        model.applyPreset(Preset.thisMachine)
+                    Button("Reset launch config to this Mac's derivation") {
+                        model.config = AppModel.defaultConfig()
                     }
                     Button("Open config folder") {
                         UIActions.revealPath(Storage.applicationDirectory.path)

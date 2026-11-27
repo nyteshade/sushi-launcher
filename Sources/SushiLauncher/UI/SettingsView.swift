@@ -35,19 +35,18 @@ struct SettingsView: View {
             }
 
             Section("GPU wired limit (\(GPULimit.sysctlKey))") {
-                Stepper(value: $model.settings.gpuLimitMB, in: 8_000...250_000, step: 1_000) {
+                HStack {
                     Text("\(model.settings.gpuLimitMB) MB")
                         .monospacedDigit()
+                    Spacer()
+                    Button("Check current") { model.checkGPULimit() }
                 }
                 Toggle("Raise before every launch (asks for authorization)",
                        isOn: $model.settings.raiseGPUBeforeLaunch)
-                HStack {
-                    Button("Raise now…") { model.raiseGPULimitNow() }
-                    Button("Check current") { model.checkGPULimit() }
-                }
-                Text("Sets all three limits together, as sushi's docs require: \(GPULimit.sysctlKey)=\(model.settings.gpuLimitMB) and both user-wire limits to \(GPULimit.wireBytes(forMB: model.settings.gpuLimitMB)) bytes. Setting only the GPU key leaves macOS capping what sushi may wire at the lower value, and prefill slows with no error. All three reset at every reboot.")
+                Text("This is a PER-MODEL number, not a preference: the docs pair each pack with a validated limit, and exceeding one can panic the machine. It is set by the configuration chooser — pick a pack, a context and a posture there, and the limit follows. Setting only the GPU key leaves macOS capping what sushi may wire at the lower user-wire value, and prefill slows with no error; the app always sets all three together. All three reset at every reboot.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Server") {

@@ -42,12 +42,56 @@ struct ConfigChooser: View {
             kvRow
             Divider()
             BudgetBar(budget: derived.budget)
+            limitRow
             rationaleRows
             if !derived.warnings.isEmpty {
                 warningsRows
             }
             applyRow
         }
+    }
+
+    // MARK: GPU limit for THIS model
+    //
+    // The wired limit is a per-model number: the docs pair each pack with a
+    // validated ceiling, and exceeding one can panic the machine. So the
+    // button names the model it is for and the limit it will set, rather
+    // than offering a generic "raise the limit" that could be wrong for
+    // whatever pack is selected.
+
+    private var limitRow: some View {
+        VStack(alignment: .leading, spacing: 5) {
+            HStack(spacing: 8) {
+                Button {
+                    model.raiseGPULimitNow()
+                } label: {
+                    Label("Raise GPU limit to \(derived.gpuLimitMB) MB for \(shortPackName)",
+                          systemImage: "arrow.up.circle")
+                }
+                .disabled(model.server.isBusy)
+
+                Button("Check current") { model.checkGPULimit() }
+                    .controlSize(.small)
+                Spacer()
+            }
+
+            Text("Sets all three limits together — \(GPULimit.sysctlKey) and both user-wire limits at \(GPULimit.wireBytes(forMB: derived.gpuLimitMB)) bytes. macOS asks for your password. All three reset at every reboot.")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    private var shortPackName: String {
+        let name = packName
+        // "Qwen3.8-Flash-Next-Sushi-STQ-2.75bpw" → "Qwen STQ 2.75bpw"
+        if let bpwRange = name.range(of: #"(\d+(?:\.\d+)?)bpw"#, options: .regularExpression) {
+            let bpw = name[bpwRange]
+            let family = profile.family.label
+            let stq = name.lowercased().contains("stq") ? " STQ" : ""
+            return "\(family)\(stq) \(bpw)"
+        }
+        return name
     }
 
     // MARK: Context

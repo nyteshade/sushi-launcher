@@ -142,6 +142,16 @@ struct PackProfile {
 
 enum ConfigDeriver {
 
+    /// Working margin above what a configuration strictly needs, in MB.
+    ///
+    /// The basis is sushi's own allowance: it subtracts 4048 MB from the
+    /// wired limit before planning (see MemoryModel.unplannedOverheadMB), so
+    /// a limit that leaves less than that above the requirement would be
+    /// planned against a ceiling below the requirement. Balanced doubles it
+    /// so a second small allocation does not tip the load into a refusal.
+    static let balancedMarginMB = MemoryModel.unplannedOverheadMB * 2
+    static let conservativeMarginMB = MemoryModel.unplannedOverheadMB
+
     /// A derived configuration plus the reasoning behind it, so the UI can
     /// show WHY rather than just what.
     struct Derived {
@@ -177,12 +187,6 @@ enum ConfigDeriver {
         let bpw = PackKnowledge.bpw(from: packName) ?? 4.0
         let weights = profile.weightsGiB(atBPW: bpw) ?? 0
 
-        // The GPU limit is the posture's share of the standard limit, rounded
-        // to the nearest 1000 MB because that is the granularity sysctl and
-        // the docs' own recipes use.
-        let standard = MemoryModel.standardLimitMB(forRAMGB: ramGB)
-        let limitMB = Int((Double(standard) * posture.budgetFraction / 1000).rounded()) * 1000
-
         // KV quantisation: the person's choice, unless the family refuses it,
         // in which case fall back to the best it accepts.
         var kvQuant = kv.kvQuant
@@ -197,6 +201,56 @@ enum ConfigDeriver {
                 warnings.append("\(family.label) refuses \(kvQuant)-bit KV; using \(fallback.kvQuant)-bit instead.")
                 kvQuant = fallback.kvQuant
             }
+        }
+
+        // The GPU limit is a PER-MODEL number, not a fraction of RAM.
+        //
+        // The docs pair each pack with a validated limit, and exceeding one
+        // can panic the machine ("64 GB Mac, Qwen STQ-2.75bpw (limit 59000;
+        // above it macOS runs out of memory first and the kernel panics)").
+        // So the documented limit is the CEILING, and the posture chooses
+        // where to sit beneath it:
+        //
+        //   maximum      → the documented limit, which is what the docs
+        //                  validated for this pack on this Mac
+        //   balanced     → the documented limit, but never more than the
+        //                  configuration actually needs plus a margin
+        //   conservative → the requirement plus a smaller margin
+        //
+        // A configuration that needs less than the ceiling should not ask for
+        // more than it needs: the wired limit is memory other apps cannot use.
+        let documented = PackKnowledge.documentedLimitMB(family: family, bpw: bpw, ramGB: ramGB)
+        let standard = MemoryModel.standardLimitMB(forRAMGB: ramGB)
+        let ceiling = documented ?? standard
+
+        // What this configuration actually needs, from the same arithmetic
+        // the budget bar shows.
+        let kvForLimit = MemoryModel.kvGiB(contextTokens: contextTokens,
+                                           kvQuant: kvQuant, family: family)
+        let required = PackKnowledge.requiredLimitMB(weightsGiB: weights, kvGiB: kvForLimit)
+
+        let limitMB: Int
+        switch posture {
+        case .maximum:
+            limitMB = ceiling
+        case .balanced:
+            // Enough for the configuration plus a working margin, never above
+            // the documented ceiling.
+            limitMB = min(ceiling, max(required + balancedMarginMB, required))
+        case .conservative:
+            limitMB = min(ceiling, max(required + conservativeMarginMB, required))
+        }
+        // Round to the 1000 MB granularity sysctl and the docs' recipes use.
+        let roundedLimit = Int((Double(limitMB) / 1000).rounded()) * 1000
+
+        var limitNotes: [String] = []
+        if let documented {
+            limitNotes.append("The docs pair this pack with a \(documented) MB wired limit on a \(ramGB) GB Mac; exceeding it can panic the machine.")
+        } else {
+            limitNotes.append("The docs state no limit for this pack on a \(ramGB) GB Mac; using the standard \(standard) MB (RAM less 4096).")
+        }
+        if roundedLimit < ceiling {
+            limitNotes.append("This configuration needs \(required) MB, so the limit is set to \(roundedLimit) MB rather than the full \(ceiling) MB — the rest stays available to other apps.")
         }
 
         // A streamed pack's anchor describes what stays resident when the
@@ -216,7 +270,7 @@ enum ConfigDeriver {
                                         kvQuant: kvQuant,
                                         family: family,
                                         ramGB: ramGB,
-                                        limitMB: limitMB)
+                                        limitMB: roundedLimit)
 
         // ── Flags ──────────────────────────────────────────────────────
         var assignments: [String: OptionAssignment] = [:]
@@ -300,13 +354,14 @@ enum ConfigDeriver {
             warnings.append("This pack has no n-gram table, so MTP's prompt-lookup drafts have nothing to match against.")
         }
 
+        rationale.append(contentsOf: limitNotes)
         rationale.insert("Weights \(fmt(residentWeights)) GiB + KV \(fmt(budget.kvGiB)) GiB + \(fmt(budget.overheadGiB)) GiB warmup = \(fmt(budget.totalGiB)) GiB of \(fmt(budget.usableGiB)) GiB usable at a \(limitMB) MB wired limit.", at: 0)
 
         return Derived(config: LaunchConfig(assignments: assignments),
                        budget: budget,
                        contextTokens: contextTokens,
                        kvQuant: kvQuant,
-                       gpuLimitMB: limitMB,
+                       gpuLimitMB: roundedLimit,
                        rationale: rationale,
                        warnings: warnings)
     }

@@ -71,6 +71,91 @@ enum PackKnowledge {
         ),
     ]
 
+    /// The wired limit the docs pair with a pack on a given Mac, in MB.
+    ///
+    /// These are VALIDATED numbers, not preferences. The docs warn that
+    /// exceeding one can take the machine down: "64 GB Mac, Qwen
+    /// Sushi-STQ-2.75bpw (limit 59000; above it macOS runs out of memory
+    /// first and the kernel panics)". So a limit is a per-model safety
+    /// ceiling, and deriving it from a generic fraction of RAM — which is
+    /// what this app used to do — is wrong in both directions: too high for
+    /// a model that needs less, too low for DeepSeek and Hy4, which the docs
+    /// give 125000 on a 128 GB Mac.
+    ///
+    /// Keyed by family and bpw; the nearest documented bpw at or above the
+    /// pack's is used, so a new quant inherits its family's ceiling rather
+    /// than inventing one.
+    private static let documentedLimits: [ModelFamily: [(bpw: Double, ramGB: Int, limitMB: Int)]] = [
+        .qwen: [
+            (2.0,  48,  43_000),
+            (2.75, 64,  59_000),
+            (4.0,  96,  90_000),
+            (4.0,  128, 120_000),
+        ],
+        .mimo: [
+            (2.3, 128, 120_000),
+        ],
+        .glm: [
+            (2.0,  96,  90_000),
+            (2.4,  128, 120_000),
+        ],
+        .deepseek: [
+            (1.75, 96,  93_000),
+            (1.75, 128, 125_000),
+        ],
+        .hy4: [
+            (2.25, 48, 44_000),
+            (2.25, 64, 60_000),
+            (4.0,  96, 92_000),
+            (4.0,  128, 125_000),
+        ],
+    ]
+
+    /// The documented limit for this pack on a Mac of `ramGB`, or nil when
+    /// the docs do not state one for a Mac this size.
+    ///
+    /// The docs give a limit per (pack, Mac size) pair. Three cases:
+    ///
+    ///   • exact tier      → that limit.
+    ///   • SMALLER Mac than any documented tier → the smallest tier's limit.
+    ///     That is a real safety ceiling: the 59000 for 2.75bpw exists
+    ///     because "above it macOS runs out of memory first and the kernel
+    ///     panics" on a 64 GB Mac.
+    ///   • LARGER Mac than any documented tier → nil. The docs state nothing
+    ///     for this pack at this size, and borrowing a smaller Mac's ceiling
+    ///     would under-report the machine and declare valid configurations
+    ///     unfittable. The caller falls back to the standard limit (RAM less
+    ///     4096), which is the docs' own rule for a Mac they do not list.
+    static func documentedLimitMB(family: ModelFamily, bpw: Double, ramGB: Int) -> Int? {
+        guard let rows = documentedLimits[family] else { return nil }
+        // Nearest documented bpw at or above the pack's.
+        let atOrAbove = rows.filter { $0.bpw >= bpw - 0.001 }
+        let candidates = atOrAbove.isEmpty ? rows : atOrAbove
+        let nearestBPW = candidates.map { $0.bpw }.min() ?? bpw
+        let atBPW = candidates.filter { abs($0.bpw - nearestBPW) < 0.001 }
+
+        if let exact = atBPW.first(where: { $0.ramGB == ramGB }) { return exact.limitMB }
+        // A smaller Mac than the docs cover: the smallest tier is the ceiling.
+        if ramGB < (atBPW.map { $0.ramGB }.min() ?? ramGB) {
+            return atBPW.min(by: { $0.ramGB < $1.ramGB })?.limitMB
+        }
+        // A larger Mac than the docs cover for this pack: no documented limit.
+        return nil
+    }
+
+    /// The smallest wired limit that lets a configuration load, in MB.
+    ///
+    /// This is the other half of the answer: a documented limit is a CEILING,
+    /// and a configuration that needs less should not ask for more than it
+    /// needs. Derived from the same arithmetic the budget bar shows.
+    static func requiredLimitMB(weightsGiB: Double, kvGiB: Double,
+                                warmupGiB: Double = MemoryModel.warmupGiB) -> Int {
+        let totalGiB = weightsGiB + kvGiB + warmupGiB
+        let totalMB = Int((totalGiB * Double(MemoryModel.bytesPerGiB)
+                           / Double(MemoryModel.bytesPerMB)).rounded(.up))
+        return totalMB + MemoryModel.unplannedOverheadMB
+    }
+
     /// Parse "…:2.75bpw" → 2.75
     static func bpw(from packName: String) -> Double? {
         guard let range = packName.range(of: #"(\d+(?:\.\d+)?)bpw"#, options: .regularExpression) else { return nil }
